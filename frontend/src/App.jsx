@@ -1,32 +1,71 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import jsPDF from "jspdf";
-import {
-  TrendingUp,
-  BarChart3,
-  LineChart,
-  FileText,
-  Edit,
-  Send,
-} from "lucide-react";
+import { Send } from "lucide-react";
 import Sidebar from "./components/Sidebar";
+
+const API_BASE = "https://marketing-report-generator.onrender.com/api/report";
+
+const getSearchChatId = () =>
+  new URLSearchParams(window.location.search).get("chatId");
+
+const setSearchChatId = (chatId) => {
+  const url = new URL(window.location.href);
+
+  if (chatId) {
+    url.searchParams.set("chatId", chatId);
+  } else {
+    url.searchParams.delete("chatId");
+  }
+
+  window.history.pushState({}, "", url);
+};
+
+const getRawTextFromResults = (results = []) =>
+  results
+    .map((result) => {
+      if (typeof result.report === "object" && result.report?.cleanedData) {
+        return result.report.cleanedData.join("\n\n");
+      }
+
+      return JSON.stringify(result, null, 2);
+    })
+    .join("\n\n----------------------\n\n");
 
 function App() {
   const [input, setInput] = useState("");
-  const [response, setResponse] = useState("");
-  const [resultsData, setResultsData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [hasStarted, setHasStarted] = useState(false);
-  const [rawResponse, setRawResponse] = useState("");
-  const [view, setView] = useState("report");
   const [history, setHistory] = useState([]);
+  const [activeChatId, setActiveChatId] = useState(() => getSearchChatId());
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [hasStarted, setHasStarted] = useState(() => Boolean(getSearchChatId()));
+  const [messageViews, setMessageViews] = useState({});
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const nextChatId = getSearchChatId();
+      setActiveChatId(nextChatId);
+      setMessageViews({});
+      setHasStarted(Boolean(nextChatId));
+      if (!nextChatId) {
+        setMessages([]);
+      }
+    };
+
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await axios.get("https://marketing-report-generator.onrender.com/api/report/history");
-        console.log(res.data.history);
-        setHistory(res.data.history);
+        const res = await axios.get(`${API_BASE}/history`);
+        setHistory(res.data.history || []);
       } catch (err) {
         console.error(err);
       }
@@ -35,71 +74,85 @@ function App() {
     fetchHistory();
   }, []);
 
+  useEffect(() => {
+    const fetchChat = async () => {
+      if (!activeChatId) return;
+
+      try {
+        setLoading(true);
+        setMessageViews({});
+        const res = await axios.get(`${API_BASE}/history/${activeChatId}`);
+        setMessages(res.data.chat?.messages || []);
+        setHasStarted(true);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchChat();
+  }, [activeChatId]);
+
+  const upsertHistoryItem = (chatId, title, updatedAt = new Date().toISOString()) => {
+    setHistory((currentHistory) => {
+      const nextHistory = currentHistory.filter((item) => item.chatId !== chatId);
+      return [{ chatId, title, updatedAt }, ...nextHistory];
+    });
+  };
+
+  const startNewChat = () => {
+    setActiveChatId(null);
+    setMessages([]);
+    setInput("");
+    setLoading(false);
+    setHasStarted(false);
+    setMessageViews({});
+    setSearchChatId(null);
+  };
+
   const loadFromHistory = (item) => {
-    if (!item || !item.results) return;
+    if (!item?.chatId) return;
 
-    const formatted = item.results
-      .map((r) => (typeof r.report === "string" ? r.report : null))
-      .filter(Boolean)
-      .join("\n\n----------------------\n\n");
-
-    const rawData = item.results
-      .map((r) => {
-        if (typeof r.report === "object" && r.report.cleanedData) {
-          return r.report.cleanedData.join("\n\n");
-        }
-        return JSON.stringify(r, null, 2);
-      })
-      .join("\n\n----------------------\n\n");
-
-    setResponse(formatted);
-    setRawResponse(rawData);
-    setView(formatted ? "report" : "raw");
+    setMessageViews({});
+    setActiveChatId(item.chatId);
     setHasStarted(true);
+    setSearchChatId(item.chatId);
   };
 
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || loading) return;
+
+    const nextInput = input.trim();
 
     try {
       setHasStarted(true);
       setLoading(true);
-      setResponse("");
 
-      const companies = input.split(",").map((c) => c.trim());
-
-      const res = await axios.post("https://marketing-report-generator.onrender.com/api/report", {
-        companies,
+      const res = await axios.post(API_BASE, {
+        chatId: activeChatId || undefined,
+        input: nextInput,
       });
 
-      setResultsData(res.data.results);
+      const nextChatId = res.data.chatId;
+      const nextMessages = res.data.messages || [];
 
-      // AI REPORT
-      const formatted = res.data.results
-        .map((r) => (typeof r.report === "string" ? r.report : null))
-        .filter(Boolean)
-        .join("\n\n----------------------\n\n");
-
-      // RAW DATA (Tavily fallback)
-      const rawData = res.data.results
-        .map((r) => {
-          if (typeof r.report === "object" && r.report.cleanedData) {
-            return r.report.cleanedData.join("\n\n");
-          }
-          return JSON.stringify(r, null, 2);
-        })
-        .join("\n\n----------------------\n\n");
-
-      // store both
-      setResponse(formatted);
-      setRawResponse(rawData);
-
-      // auto switch if Gemini fails
-      if (!formatted) setView("raw");
-      else setView("report");
+      setMessages(nextMessages);
+      setInput("");
+      setActiveChatId(nextChatId);
+      setSearchChatId(nextChatId);
+      upsertHistoryItem(nextChatId, res.data.title);
     } catch (error) {
       console.error(error);
-      setResponse("Error fetching report");
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          role: "assistant",
+          content: "Error fetching report",
+          results: [],
+          createdAt: new Date().toISOString(),
+        },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -110,13 +163,8 @@ function App() {
       text = JSON.stringify(text, null, 2);
     }
 
-    // Replace ### headings with uppercase + decorative markers
     text = text.replace(/###\s*(.+)/g, "━━━ $1 ━━━");
-
-    // Replace ** (bold markers) with UPPERCASE for PDF visibility
     text = text.replace(/\*\*(.+?)\*\*/g, "$1");
-
-    // Remove single * (asterisks)
     text = text.replace(/\*/g, "");
 
     return text;
@@ -127,11 +175,9 @@ function App() {
       text = JSON.stringify(text, null, 2);
     }
 
-    // Split by lines to handle headings
     const lines = text.split("\n");
 
     return lines.map((line, index) => {
-      // Handle ###Heading (markdown style)
       if (line.trim().startsWith("###")) {
         const heading = line.replace(/^###\s*/, "").trim();
         return (
@@ -146,25 +192,22 @@ function App() {
         );
       }
 
-      // Handle SWOT sections (Strengths, Weaknesses, Opportunities, Threats)
       const swotMatch = line
         .trim()
         .match(/^(Strengths|Weaknesses|Opportunities|Threats)$/i);
       if (swotMatch) {
         const swotTitle = swotMatch[1];
-        const emoji = "●";
         return (
           <div
             key={index}
             className="text-lg font-bold text-white mt-5 mb-3 bg-gray-800 p-2 rounded"
           >
-            <span className="mr-2">{emoji}</span>
+            <span className="mr-2">●</span>
             {swotTitle.toUpperCase()}
           </div>
         );
       }
 
-      // Handle lines that are headers (end with colon)
       if (line.trim().endsWith(":") && line.trim().length < 50) {
         const headerText = line.trim();
         return (
@@ -178,7 +221,6 @@ function App() {
         );
       }
 
-      // Handle bullet points (lines starting with -, *, or numbers)
       if (line.trim().match(/^([•\-*]|\d+\.)\s+/)) {
         const content = line.trim().replace(/^([•\-*]|\d+\.)\s+/, "");
         return (
@@ -189,22 +231,19 @@ function App() {
         );
       }
 
-      // Handle bold text (**text**) and remove single asterisks
-      let processedLine = line;
-      const boldParts = processedLine.split(/(\*\*[^*]+\*\*)/g);
+      const boldParts = line.split(/(\*\*[^*]+\*\*)/g);
 
       return (
         <p key={index} className="mb-2">
           {boldParts.map((part, i) => {
             if (part.startsWith("**") && part.endsWith("**")) {
-              // Keep bold formatting
               return (
                 <strong key={i} className="font-semibold text-white">
                   {part.replace(/\*\*/g, "")}
                 </strong>
               );
             }
-            // Remove single asterisks from regular text
+
             return <span key={i}>{part.replace(/\*/g, "")}</span>;
           })}
         </p>
@@ -212,7 +251,6 @@ function App() {
     });
   };
 
-  // Helper function to format bold in text
   const formatBold = (text) => {
     const boldParts = text.split(/(\*\*[^*]+\*\*)/g);
     return boldParts.map((part, i) => {
@@ -227,26 +265,22 @@ function App() {
     });
   };
 
-  const downloadSinglePDF = () => {
-    if (!resultsData.length) return;
+  const downloadSinglePDF = (results) => {
+    if (!results?.length) return;
 
     const doc = new jsPDF();
 
-    resultsData.forEach((item, index) => {
-      // Title
+    results.forEach((item, index) => {
       doc.setFont("helvetica", "bold");
       doc.setFontSize(18);
       doc.text("Marketing Report", 105, 15, { align: "center" });
 
-      // Company Name
       doc.setFontSize(14);
       doc.text(`Company: ${item.company}`, 10, 30);
 
-      // Line separator
       doc.setLineWidth(0.5);
       doc.line(10, 35, 200, 35);
 
-      // Content
       const content =
         typeof item.report === "string"
           ? item.report
@@ -258,7 +292,6 @@ function App() {
       doc.setFontSize(11);
 
       const lines = doc.splitTextToSize(cleanContent, 180);
-
       let y = 45;
 
       lines.forEach((line) => {
@@ -270,8 +303,7 @@ function App() {
         y += 7;
       });
 
-      // Add new page for next company
-      if (index !== resultsData.length - 1) {
+      if (index !== results.length - 1) {
         doc.addPage();
       }
     });
@@ -279,26 +311,22 @@ function App() {
     doc.save("marketing-report.pdf");
   };
 
-  const downloadMultiplePDFs = () => {
-    if (!resultsData.length) return;
+  const downloadMultiplePDFs = (results) => {
+    if (!results?.length) return;
 
-    resultsData.forEach((item) => {
+    results.forEach((item) => {
       const doc = new jsPDF();
 
-      // Title
       doc.setFont("helvetica", "bold");
       doc.setFontSize(18);
       doc.text("Marketing Report", 105, 15, { align: "center" });
 
-      // Company Name
       doc.setFontSize(14);
       doc.text(`Company: ${item.company}`, 10, 30);
 
-      // Line
       doc.setLineWidth(0.5);
       doc.line(10, 35, 200, 35);
 
-      // Content
       const content =
         typeof item.report === "string"
           ? item.report
@@ -310,7 +338,6 @@ function App() {
       doc.setFontSize(11);
 
       const lines = doc.splitTextToSize(cleanContent, 180);
-
       let y = 45;
 
       lines.forEach((line) => {
@@ -326,11 +353,87 @@ function App() {
     });
   };
 
+  const toggleMessageView = (messageIndex, nextView) => {
+    setMessageViews((currentViews) => ({
+      ...currentViews,
+      [messageIndex]: nextView,
+    }));
+  };
+
+  const renderAssistantMessage = (message, messageIndex) => {
+    const currentView =
+      messageViews[messageIndex] ||
+      (message.content?.trim() ? "report" : "raw");
+    const rawResponse = getRawTextFromResults(message.results);
+    const renderedText = currentView === "report" ? message.content : rawResponse;
+
+    return (
+      <div key={messageIndex} className="bg-[#111111] border border-gray-800 rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-xs text-gray-500">
+            {message.createdAt
+              ? new Date(message.createdAt).toLocaleString()
+              : ""}
+          </p>
+        </div>
+
+        {!!message.results?.length && (
+          <>
+            <div className="flex gap-3 mb-4 flex-wrap">
+              <button
+                onClick={() => downloadSinglePDF(message.results)}
+                className="bg-white text-black px-4 py-2 rounded-lg cursor-pointer hover:scale-105 transition ease-in duration-150"
+              >
+                Download Combined PDF
+              </button>
+
+              <button
+                onClick={() => downloadMultiplePDFs(message.results)}
+                className="bg-gray-700 text-white px-4 py-2 rounded-lg cursor-pointer hover:scale-105 transition ease-in duration-150"
+              >
+                Download Separate PDFs
+              </button>
+            </div>
+
+            <div className="flex gap-3 mb-4">
+              <button
+                onClick={() => toggleMessageView(messageIndex, "report")}
+                className={`px-4 py-1 rounded ${
+                  currentView === "report" ? "bg-white text-black" : "bg-gray-700"
+                }`}
+              >
+                AI Report
+              </button>
+
+              <button
+                onClick={() => toggleMessageView(messageIndex, "raw")}
+                className={`px-4 py-1 rounded ${
+                  currentView === "raw" ? "bg-white text-black" : "bg-gray-700"
+                }`}
+              >
+                Raw Data
+              </button>
+            </div>
+          </>
+        )}
+
+        <div className="text-gray-300 text-base leading-relaxed">
+          {formatText(renderedText || "No response available")}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="h-screen w-full bg-black text-white flex">
-      <Sidebar history={history} loadFromHistory={loadFromHistory} />
+      <Sidebar
+        history={history}
+        activeChatId={activeChatId}
+        loadFromHistory={loadFromHistory}
+        startNewChat={startNewChat}
+      />
+
       <div className="flex-1 flex flex-col">
-        {/* BEFORE START */}
         {!hasStarted && (
           <div className="flex flex-col items-center justify-center flex-1 px-4 ">
             <div className="text-center mb-10">
@@ -360,11 +463,31 @@ function App() {
           </div>
         )}
 
-        {/* CHAT MODE */}
         {hasStarted && (
           <>
             <div className="flex-1 overflow-y-auto px-6 py-8">
-              <div className="max-w-4xl mx-auto">
+              <div className="max-w-4xl mx-auto space-y-6">
+                {!messages.length && !loading && (
+                  <div className="text-center text-gray-500 mt-10">
+                    Start this chat by entering company names below.
+                  </div>
+                )}
+
+                {messages.map((message, index) => {
+                  if (message.role === "user") {
+                    return (
+                      <div
+                        key={index}
+                        className="bg-[#1f1f1f] rounded-2xl px-5 py-4 ml-auto max-w-2xl"
+                      >
+                        <p className="text-white">{message.content}</p>
+                      </div>
+                    );
+                  }
+
+                  return renderAssistantMessage(message, index);
+                })}
+
                 {loading && (
                   <div className="flex flex-col items-center mt-10">
                     <p className="text-gray-400 mb-4 animate-pulse">
@@ -374,56 +497,10 @@ function App() {
                   </div>
                 )}
 
-                {!loading && (response || rawResponse) && (
-                  <>
-                    {/* 🔥 DOWNLOAD BUTTONS */}
-                    <div className="flex gap-3 mb-6 flex-wrap">
-                      <button
-                        onClick={downloadSinglePDF}
-                        className="bg-white text-black px-4 py-2 rounded-lg cursor-pointer hover:scale-105 transition ease-in duration-150"
-                      >
-                        Download Combined PDF
-                      </button>
-
-                      <button
-                        onClick={downloadMultiplePDFs}
-                        className="bg-gray-700 text-white px-4 py-2 rounded-lg cursor-pointer hover:scale-105 transition ease-in duration-150"
-                      >
-                        Download Separate PDFs
-                      </button>
-                    </div>
-                    <div className="flex gap-3 mb-4">
-                      <button
-                        onClick={() => setView("report")}
-                        className={`px-4 py-1 rounded ${
-                          view === "report"
-                            ? "bg-white text-black"
-                            : "bg-gray-700"
-                        }`}
-                      >
-                        AI Report
-                      </button>
-
-                      <button
-                        onClick={() => setView("raw")}
-                        className={`px-4 py-1 rounded ${
-                          view === "raw" ? "bg-white text-black" : "bg-gray-700"
-                        }`}
-                      >
-                        Raw Data
-                      </button>
-                    </div>
-
-                    {/* RESPONSE */}
-                    <div className="text-gray-300 text-base leading-relaxed">
-                      {formatText(view === "report" ? response : rawResponse)}
-                    </div>
-                  </>
-                )}
+                <div ref={messagesEndRef} />
               </div>
             </div>
 
-            {/* INPUT */}
             <div className="p-4 border-t border-gray-800 flex items-center justify-center">
               <div className="w-full max-w-2xl bg-[#1f1f1f] rounded-3xl p-3 flex items-center justify-center gap-2">
                 <input
