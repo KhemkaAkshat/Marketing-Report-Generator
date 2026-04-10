@@ -66,7 +66,6 @@ function App() {
     }
   };
 
-  // ✅ Clean text for PDF - keeps formatting (bold, headings), removes asterisks
   const cleanTextForPDF = (text) => {
     if (typeof text !== "string") {
       text = JSON.stringify(text, null, 2);
@@ -84,7 +83,6 @@ function App() {
     return text;
   };
 
-  // ✅ Enhanced formatter - headings with dashes/styling, bold for **, clean text
   const formatText = (text) => {
     if (typeof text !== "string") {
       text = JSON.stringify(text, null, 2);
@@ -115,13 +113,7 @@ function App() {
         .match(/^(Strengths|Weaknesses|Opportunities|Threats)$/i);
       if (swotMatch) {
         const swotTitle = swotMatch[1];
-        const swotColors = {
-          Strengths: "🟢",
-          Weaknesses: "🔴",
-          Opportunities: "🟡",
-          Threats: "🔵",
-        };
-        const emoji = swotColors[swotTitle] || "●";
+        const emoji =  "●";
         return (
           <div
             key={index}
@@ -196,7 +188,6 @@ function App() {
     });
   };
 
-  // ✅ SINGLE PDF
   const downloadSinglePDF = () => {
     if (!resultsData.length) return;
 
@@ -249,7 +240,6 @@ function App() {
     doc.save("marketing-report.pdf");
   };
 
-  // ✅ MULTIPLE PDFs
   const downloadMultiplePDFs = () => {
     if (!resultsData.length) return;
 
@@ -301,18 +291,18 @@ function App() {
     <div className="h-screen w-full bg-black text-white flex flex-col">
       {/* BEFORE START */}
       {!hasStarted && (
-        <div className="flex flex-col items-center justify-center flex-1 px-4">
+        <div className="flex flex-col items-center justify-center flex-1 px-4 ">
           <div className="text-center mb-10">
-            <p className="text-gray-400 text-lg mb-2">✨ Hi Akshat</p>
+            <p className="text-gray-400 text-lg mb-2">✨ Hey! There,</p>
             <h1 className="text-4xl md:text-5xl font-semibold">
-              Where should we start?
+              Which company's insights want?
             </h1>
           </div>
 
           <div className="w-full max-w-2xl bg-[#1f1f1f] rounded-3xl p-3 flex items-center gap-2">
             <input
               type="text"
-              placeholder="Enter company names..."
+              placeholder="Enter company names...seprated by comma[nike, puma]"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSend()}
