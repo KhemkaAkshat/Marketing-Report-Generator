@@ -1,8 +1,14 @@
 import express from "express";
-import { generateReport, getHistory } from "../controller/report.controller.js";
-const router = express.Router()
+import {
+  generateReport,
+  getChatById,
+  getHistory,
+} from "../controller/report.controller.js";
 
-router.post("/", generateReport)
-router.get("/history",getHistory)
+const router = express.Router();
 
-export default router
+router.post("/", generateReport);
+router.get("/history", getHistory);
+router.get("/history/:chatId", getChatById);
+
+export default router;
