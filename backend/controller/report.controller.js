@@ -50,7 +50,10 @@ export const generateReport = async (req, res) => {
 
 export const getHistory = async (req, res)=>{
   try {
-    const history = (await historyModel.find()).sort({createdAt: -1}).limit(10)
+    const history = await historyModel
+  .find()
+  .sort({ createdAt: -1 })
+  .limit(10);
     res.status(200).json({message:"History fetched", history})
     
   } catch (error) {
