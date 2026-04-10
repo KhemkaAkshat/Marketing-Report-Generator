@@ -1,5 +1,6 @@
 import { useState } from "react";
 import axios from "axios";
+import jsPDF from "jspdf";
 import {
   TrendingUp,
   BarChart3,
@@ -12,6 +13,7 @@ import {
 function App() {
   const [input, setInput] = useState("");
   const [response, setResponse] = useState("");
+  const [resultsData, setResultsData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
 
@@ -29,16 +31,13 @@ function App() {
         companies,
       });
 
-      // ✅ Gemini success case
+      setResultsData(res.data.results);
+
       const formatted = res.data.results
-        .map((r) => {
-          if (typeof r.report === "string") return r.report;
-          return null;
-        })
+        .map((r) => (typeof r.report === "string" ? r.report : null))
         .filter(Boolean)
         .join("\n\n----------------------\n\n");
 
-      // ✅ Tavily fallback case
       const rawData = res.data.results
         .map((r) => {
           if (typeof r.report === "object" && r.report.cleanedData) {
@@ -53,7 +52,7 @@ function App() {
       setResponse(
         typeof finalOutput === "string"
           ? finalOutput
-          : JSON.stringify(finalOutput, null, 2)
+          : JSON.stringify(finalOutput, null, 2),
       );
     } catch (error) {
       console.error(error);
@@ -63,32 +62,242 @@ function App() {
     }
   };
 
-  // ✅ Bold formatter
+  // ✅ Clean text for PDF - keeps formatting (bold, headings), removes asterisks
+  const cleanTextForPDF = (text) => {
+    if (typeof text !== "string") {
+      text = JSON.stringify(text, null, 2);
+    }
+
+    // Replace ### headings with uppercase + decorative markers
+    text = text.replace(/###\s*(.+)/g, "━━━ $1 ━━━");
+
+    // Replace ** (bold markers) with UPPERCASE for PDF visibility
+    text = text.replace(/\*\*(.+?)\*\*/g, "$1");
+
+    // Remove single * (asterisks)
+    text = text.replace(/\*/g, "");
+
+    return text;
+  };
+
+  // ✅ Enhanced formatter - headings with dashes/styling, bold for **, clean text
   const formatText = (text) => {
     if (typeof text !== "string") {
       text = JSON.stringify(text, null, 2);
     }
 
-    const parts = text.split(/(\*\*.*?\*\*)/g);
+    // Split by lines to handle headings
+    const lines = text.split("\n");
 
-    return parts.map((part, index) => {
+    return lines.map((line, index) => {
+      // Handle ###Heading (markdown style)
+      if (line.trim().startsWith("###")) {
+        const heading = line.replace(/^###\s*/, "").trim();
+        return (
+          <div
+            key={index}
+            className="text-xl font-bold text-white mt-4 mb-2 flex items-center gap-3"
+          >
+            <span className="text-gray-500">━━━</span>
+            <span>{heading}</span>
+            <span className="text-gray-500">━━━</span>
+          </div>
+        );
+      }
+
+      // Handle SWOT sections (Strengths, Weaknesses, Opportunities, Threats)
+      const swotMatch = line
+        .trim()
+        .match(/^(Strengths|Weaknesses|Opportunities|Threats)$/i);
+      if (swotMatch) {
+        const swotTitle = swotMatch[1];
+        const swotColors = {
+          Strengths: "🟢",
+          Weaknesses: "🔴",
+          Opportunities: "🟡",
+          Threats: "🔵",
+        };
+        const emoji = swotColors[swotTitle] || "●";
+        return (
+          <div
+            key={index}
+            className="text-lg font-bold text-white mt-5 mb-3 bg-gray-800 p-2 rounded"
+          >
+            <span className="mr-2">{emoji}</span>
+            {swotTitle.toUpperCase()}
+          </div>
+        );
+      }
+
+      // Handle lines that are headers (end with colon)
+      if (line.trim().endsWith(":") && line.trim().length < 50) {
+        const headerText = line.trim();
+        return (
+          <div
+            key={index}
+            className="text-lg font-bold text-white mt-3 mb-2 flex items-center gap-2"
+          >
+            <span className="text-gray-500">┃</span>
+            {headerText}
+          </div>
+        );
+      }
+
+      // Handle bullet points (lines starting with -, *, or numbers)
+      if (line.trim().match(/^([•\-*]|\d+\.)\s+/)) {
+        const content = line.trim().replace(/^([•\-*]|\d+\.)\s+/, "");
+        return (
+          <p key={index} className="mb-2 ml-4 text-gray-300">
+            <span className="text-gray-500">• </span>
+            {formatBold(content)}
+          </p>
+        );
+      }
+
+      // Handle bold text (**text**) and remove single asterisks
+      let processedLine = line;
+      const boldParts = processedLine.split(/(\*\*[^*]+\*\*)/g);
+
+      return (
+        <p key={index} className="mb-2">
+          {boldParts.map((part, i) => {
+            if (part.startsWith("**") && part.endsWith("**")) {
+              // Keep bold formatting
+              return (
+                <strong key={i} className="font-semibold text-white">
+                  {part.replace(/\*\*/g, "")}
+                </strong>
+              );
+            }
+            // Remove single asterisks from regular text
+            return <span key={i}>{part.replace(/\*/g, "")}</span>;
+          })}
+        </p>
+      );
+    });
+  };
+
+  // Helper function to format bold in text
+  const formatBold = (text) => {
+    const boldParts = text.split(/(\*\*[^*]+\*\*)/g);
+    return boldParts.map((part, i) => {
       if (part.startsWith("**") && part.endsWith("**")) {
         return (
-          <strong key={index} className="font-semibold text-white">
+          <strong key={i} className="font-semibold text-white">
             {part.replace(/\*\*/g, "")}
           </strong>
         );
       }
-      return <span key={index}>{part}</span>;
+      return <span key={i}>{part.replace(/\*/g, "")}</span>;
+    });
+  };
+
+  // ✅ SINGLE PDF
+  const downloadSinglePDF = () => {
+    if (!resultsData.length) return;
+
+    const doc = new jsPDF();
+
+    resultsData.forEach((item, index) => {
+      // Title
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.text("Marketing Report", 105, 15, { align: "center" });
+
+      // Company Name
+      doc.setFontSize(14);
+      doc.text(`Company: ${item.company}`, 10, 30);
+
+      // Line separator
+      doc.setLineWidth(0.5);
+      doc.line(10, 35, 200, 35);
+
+      // Content
+      const content =
+        typeof item.report === "string"
+          ? item.report
+          : item.report.cleanedData?.join("\n\n") || "No Data";
+
+      const cleanContent = cleanTextForPDF(content);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11);
+
+      const lines = doc.splitTextToSize(cleanContent, 180);
+
+      let y = 45;
+
+      lines.forEach((line) => {
+        if (y > 280) {
+          doc.addPage();
+          y = 20;
+        }
+        doc.text(line, 10, y);
+        y += 7;
+      });
+
+      // Add new page for next company
+      if (index !== resultsData.length - 1) {
+        doc.addPage();
+      }
+    });
+
+    doc.save("marketing-report.pdf");
+  };
+
+  // ✅ MULTIPLE PDFs
+  const downloadMultiplePDFs = () => {
+    if (!resultsData.length) return;
+
+    resultsData.forEach((item) => {
+      const doc = new jsPDF();
+
+      // Title
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.text("Marketing Report", 105, 15, { align: "center" });
+
+      // Company Name
+      doc.setFontSize(14);
+      doc.text(`Company: ${item.company}`, 10, 30);
+
+      // Line
+      doc.setLineWidth(0.5);
+      doc.line(10, 35, 200, 35);
+
+      // Content
+      const content =
+        typeof item.report === "string"
+          ? item.report
+          : item.report.cleanedData?.join("\n\n") || "No Data";
+
+      const cleanContent = cleanTextForPDF(content);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(11);
+
+      const lines = doc.splitTextToSize(cleanContent, 180);
+
+      let y = 45;
+
+      lines.forEach((line) => {
+        if (y > 280) {
+          doc.addPage();
+          y = 20;
+        }
+        doc.text(line, 10, y);
+        y += 7;
+      });
+
+      doc.save(`${item.company}-report.pdf`);
     });
   };
 
   return (
     <div className="h-screen w-full bg-black text-white flex flex-col">
-      
       {/* BEFORE START */}
       {!hasStarted && (
-        <div className="flex flex-col items-center justify-center flex-1 px-4 animate-fadeIn">
+        <div className="flex flex-col items-center justify-center flex-1 px-4">
           <div className="text-center mb-10">
             <p className="text-gray-400 text-lg mb-2">✨ Hi Akshat</p>
             <h1 className="text-4xl md:text-5xl font-semibold">
@@ -96,50 +305,21 @@ function App() {
             </h1>
           </div>
 
-          {/* Input */}
-          <div className="w-full max-w-2xl bg-[#1f1f1f] rounded-3xl p-3 flex items-center gap-2 shadow-lg">
+          <div className="w-full max-w-2xl bg-[#1f1f1f] rounded-3xl p-3 flex items-center gap-2">
             <input
               type="text"
-              placeholder="Enter company names (e.g. Apple, Nike)"
+              placeholder="Enter company names..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              className="flex-1 bg-transparent outline-none text-lg placeholder-gray-400 px-2 text-white"
+              className="flex-1 bg-transparent outline-none text-lg px-2"
             />
 
             <button
               onClick={handleSend}
-              className="bg-white text-black p-2 rounded-full hover:scale-105 transition"
+              className="bg-white text-black p-2 rounded-full"
             >
               <Send size={18} />
-            </button>
-          </div>
-
-          {/* Suggestions */}
-          <div className="flex flex-wrap justify-center gap-3 mt-8 max-w-2xl animate-fadeIn">
-            <button className="flex items-center gap-2 bg-[#1f1f1f] px-4 py-2 rounded-full">
-              <TrendingUp size={16} />
-              Analyze Apple
-            </button>
-
-            <button className="flex items-center gap-2 bg-[#1f1f1f] px-4 py-2 rounded-full">
-              <BarChart3 size={16} />
-              Compare Nike vs Adidas
-            </button>
-
-            <button className="flex items-center gap-2 bg-[#1f1f1f] px-4 py-2 rounded-full">
-              <LineChart size={16} />
-              Marketing Strategy Tesla
-            </button>
-
-            <button className="flex items-center gap-2 bg-[#1f1f1f] px-4 py-2 rounded-full">
-              <FileText size={16} />
-              Generate Full Report
-            </button>
-
-            <button className="flex items-center gap-2 bg-[#1f1f1f] px-4 py-2 rounded-full">
-              <Edit size={16} />
-              Custom Query
             </button>
           </div>
         </div>
@@ -148,11 +328,10 @@ function App() {
       {/* CHAT MODE */}
       {hasStarted && (
         <>
-          {/* Response */}
-          <div className="flex-1 overflow-y-auto px-6 py-8 bg-black">
-            <div className="max-w-4xl mx-auto w-full">
+          <div className="flex-1 overflow-y-auto px-6 py-8">
+            <div className="max-w-4xl mx-auto">
               {loading && (
-                <div className="flex flex-col items-center justify-center mt-10">
+                <div className="flex flex-col items-center mt-10">
                   <p className="text-gray-400 mb-4 animate-pulse">
                     Generating your report...
                   </p>
@@ -161,37 +340,52 @@ function App() {
               )}
 
               {!loading && response && (
-                <div className="text-gray-300 text-base leading-relaxed">
-                  {response.split("\n").map((line, i) => (
-                    <p key={i} className="mb-2">
-                      {formatText(line)}
-                    </p>
-                  ))}
-                </div>
+                <>
+                  {/* 🔥 DOWNLOAD BUTTONS */}
+                  <div className="flex gap-3 mb-6 flex-wrap">
+                    <button
+                      onClick={downloadSinglePDF}
+                      className="bg-white text-black px-4 py-2 rounded-lg hover:scale-105 transition"
+                    >
+                      Download Combined PDF
+                    </button>
+
+                    <button
+                      onClick={downloadMultiplePDFs}
+                      className="bg-gray-700 text-white px-4 py-2 rounded-lg hover:scale-105 transition"
+                    >
+                      Download Separate PDFs
+                    </button>
+                  </div>
+
+                  {/* RESPONSE */}
+                  <div className="text-gray-300 text-base leading-relaxed">
+                    {response.split("\n").map((line, i) => (
+                      <p key={i} className="mb-2">
+                        {formatText(line)}
+                      </p>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           </div>
 
-          {/* Bottom Input */}
-          <div className="pt-6 pb-4 px-4 bg-black border-t border-gray-800">
-            <div className="max-w-2xl mx-auto w-full bg-[#1f1f1f] rounded-3xl p-3 flex items-center gap-2 shadow-lg">
+          {/* INPUT */}
+          <div className="p-4 border-t border-gray-800 flex items-center justify-center">
+            <div className="w-full max-w-2xl bg-[#1f1f1f] rounded-3xl p-3 flex items-center justify-center gap-2">
               <input
                 type="text"
-                placeholder="Ask more..."
+                placeholder="Enter company names..."
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                className="flex-1 bg-transparent outline-none text-lg placeholder-gray-400 px-2 text-white"
+                className="flex-1 bg-transparent outline-none text-lg px-2 "
               />
 
               <button
                 onClick={handleSend}
-                disabled={loading}
-                className={`p-2 rounded-full transition ${
-                  loading
-                    ? "bg-gray-500 cursor-not-allowed"
-                    : "bg-white text-black hover:scale-105"
-                }`}
+                className="bg-white text-black p-2 rounded-full"
               >
                 <Send size={18} />
               </button>
