@@ -16,6 +16,8 @@ function App() {
   const [resultsData, setResultsData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const [rawResponse, setRawResponse] = useState("");
+  const [view, setView] = useState("report");
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -33,11 +35,13 @@ function App() {
 
       setResultsData(res.data.results);
 
+      // AI REPORT
       const formatted = res.data.results
         .map((r) => (typeof r.report === "string" ? r.report : null))
         .filter(Boolean)
         .join("\n\n----------------------\n\n");
 
+      // RAW DATA (Tavily fallback)
       const rawData = res.data.results
         .map((r) => {
           if (typeof r.report === "object" && r.report.cleanedData) {
@@ -47,13 +51,13 @@ function App() {
         })
         .join("\n\n----------------------\n\n");
 
-      const finalOutput = formatted || rawData;
+      // store both
+      setResponse(formatted);
+      setRawResponse(rawData);
 
-      setResponse(
-        typeof finalOutput === "string"
-          ? finalOutput
-          : JSON.stringify(finalOutput, null, 2),
-      );
+      // auto switch if Gemini fails
+      if (!formatted) setView("raw");
+      else setView("report");
     } catch (error) {
       console.error(error);
       setResponse("Error fetching report");
@@ -339,7 +343,7 @@ function App() {
                 </div>
               )}
 
-              {!loading && response && (
+              {!loading && (response || rawResponse) && (
                 <>
                   {/* 🔥 DOWNLOAD BUTTONS */}
                   <div className="flex gap-3 mb-6 flex-wrap">
@@ -357,14 +361,31 @@ function App() {
                       Download Separate PDFs
                     </button>
                   </div>
+                  <div className="flex gap-3 mb-4">
+                    <button
+                      onClick={() => setView("report")}
+                      className={`px-4 py-1 rounded ${
+                        view === "report"
+                          ? "bg-white text-black"
+                          : "bg-gray-700"
+                      }`}
+                    >
+                      AI Report
+                    </button>
+
+                    <button
+                      onClick={() => setView("raw")}
+                      className={`px-4 py-1 rounded ${
+                        view === "raw" ? "bg-white text-black" : "bg-gray-700"
+                      }`}
+                    >
+                      Raw Data
+                    </button>
+                  </div>
 
                   {/* RESPONSE */}
                   <div className="text-gray-300 text-base leading-relaxed">
-                    {response.split("\n").map((line, i) => (
-                      <p key={i} className="mb-2">
-                        {formatText(line)}
-                      </p>
-                    ))}
+                    {formatText(view === "report" ? response : rawResponse)}
                   </div>
                 </>
               )}
