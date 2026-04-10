@@ -24,7 +24,7 @@ function App() {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await axios.get("http://localhost:5000/api/report/history");
+        const res = await axios.get("https://marketing-report-generator.onrender.com/api/report/history");
         console.log(res.data.history);
         setHistory(res.data.history);
       } catch (err) {
@@ -68,7 +68,7 @@ function App() {
 
       const companies = input.split(",").map((c) => c.trim());
 
-      const res = await axios.post("http://localhost:5000/api/report", {
+      const res = await axios.post("https://marketing-report-generator.onrender.com/api/report", {
         companies,
       });
 
